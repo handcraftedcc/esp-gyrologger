@@ -130,6 +130,14 @@ void led_strip_task(void* params) {
     }
 }
 
+#define SHUTTER_GPIO GPIO_NUM_8  // Choose an available GPIO for the shutter trigger
+
+static void trigger_shutter() {
+    gpio_set_level(SHUTTER_GPIO, 1); // Activate shutter (MOSFET ON)
+    vTaskDelay(pdMS_TO_TICKS(100));  // Hold for 100ms
+    gpio_set_level(SHUTTER_GPIO, 0); // Release shutter (MOSFET OFF)
+}
+
 void button_task(void* params) {
     if (gctx.settings_manager->Get("loop_mode") > 0.5) {
         gctx.logger_control.active = true;
@@ -143,17 +151,7 @@ void button_task(void* params) {
     }
 
     gpio_set_direction(btn_gpio, GPIO_MODE_INPUT);
-#if CONFIG_IDF_TARGET_ESP32C3
-    if (btn_gpio != 19 && btn_gpio != 18) {
-        gpio_set_pull_mode(btn_gpio, GPIO_PULLUP_ONLY);
-    }
-#elif CONFIG_IDF_TARGET_ESP32
     gpio_set_pull_mode(btn_gpio, GPIO_PULLUP_ONLY);
-#elif CONFIG_IDF_TARGET_ESP32S3
-    if (btn_gpio != 19 && btn_gpio != 20) {
-        gpio_set_pull_mode(btn_gpio, GPIO_PULLUP_ONLY);
-    }
-#endif
 
     static constexpr int kDebounceThreshold = 6;
     int debounce_counter = 0;
@@ -183,15 +181,21 @@ void button_task(void* params) {
                 vTaskDelay(10 / portTICK_PERIOD_MS);
             }
 
-            if (cnt > 4000) { // 40 seconds
+            if (cnt > 4000) { // 40 seconds → Reset settings
                 cur_state = prev_state;
                 gctx.settings_manager->Reset();
-            } else if (cnt > 200) { // 2 seconds
+            } else if (cnt > 200) { // 2 seconds → Increment file_epoch
                 cur_state = prev_state;
                 gctx.settings_manager->Set(
                     "file_epoch", ((int)gctx.settings_manager->Get("file_epoch") + 1) % 676);
-            } else {
+            } else { // 🔹 Normal press → Toggle BOTH logging & shutter
                 gctx.logger_control.active = !gctx.logger_control.active;
+                ESP_LOGI("BUTTON", "Logging %s", gctx.logger_control.active ? "Started" : "Stopped");
+
+                if (gctx.logger_control.active) {
+                    ESP_LOGI("BUTTON", "Triggering shutter ON");
+                    trigger_shutter();
+                }
             }
 
             vTaskDelay(200 / portTICK_PERIOD_MS);
